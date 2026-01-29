@@ -1,82 +1,13 @@
-// src/config/database.ts
+// src/config/database.ts - Version corrigée
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 // Variable globale pour GridFS
-let gfs: any;
+let gfs: any = null; // Initialisez à null
 let connectionAttempts = 0;
 const MAX_CONNECTION_ATTEMPTS = 5;
-
-const connectDB = async (): Promise<void> => {
-  try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined in environment variables');
-    }
-
-    console.log(`🔄 Tentative de connexion MongoDB (${connectionAttempts + 1}/${MAX_CONNECTION_ATTEMPTS})...`);
-    
-    const options: mongoose.ConnectOptions = {
-      serverSelectionTimeoutMS: 30000, // 30 secondes
-      socketTimeoutMS: 45000, // 45 secondes
-      maxPoolSize: 10,
-      retryWrites: true,
-    };
-
-    const conn = await mongoose.connect(process.env.MONGODB_URI, options);
-    
-    console.log(`✅ MongoDB connecté: ${conn.connection.host}`);
-    console.log(`📊 Base de données: ${conn.connection.db?.databaseName || 'N/A'}`);
-    console.log(`👥 Connexions actives: ${conn.connection.readyState === 1 ? 'Connecté' : 'Non connecté'}`);
-    
-    connectionAttempts = 0; // Réinitialiser les tentatives après succès
-    
-    // Initialiser GridFS après connexion réussie
-    initGridFS();
-    
-  } catch (error) {
-    connectionAttempts++;
-    
-    console.error(`❌ Erreur de connexion MongoDB (tentative ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}):`);
-    
-    if (error instanceof Error) {
-      console.error(`   Message: ${error.message}`);
-      
-      // Détection d'erreurs spécifiques
-      if (error.message.includes('ENOTFOUND')) {
-        console.error('   📌 Problème de DNS - Vérifiez votre URI MongoDB');
-      } else if (error.message.includes('ETIMEDOUT')) {
-        console.error('   📌 Timeout - Vérifiez votre connexion internet');
-      } else if (error.message.includes('MongooseServerSelectionError')) {
-        console.error('   📌 Impossible de se connecter au cluster MongoDB');
-        console.error('   💡 Vérifiez:');
-        console.error('      1. Votre IP est autorisée dans MongoDB Atlas');
-        console.error('      2. Votre URI de connexion est correcte');
-        console.error('      3. Vos identifiants sont valides');
-      }
-    }
-    
-    // Stratégie de reconnexion exponentielle
-    if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
-      const delay = Math.min(1000 * Math.pow(2, connectionAttempts), 30000); // Maximum 30 secondes
-      console.log(`   ⏳ Nouvelle tentative dans ${delay / 1000} secondes...`);
-      
-      setTimeout(connectDB, delay);
-    } else {
-      console.error('   ❌ Nombre maximum de tentatives atteint');
-      
-      // En production, on continue sans MongoDB
-      if (process.env.NODE_ENV === 'production') {
-        console.log('   ⚠️ Mode dégradé: L\'API fonctionnera sans base de données');
-        // L'API continuera de fonctionner avec des données mockées
-      } else {
-        console.log('   💻 Développement: Arrêt du serveur');
-        process.exit(1);
-      }
-    }
-  }
-};
 
 // Initialiser GridFS
 const initGridFS = () => {
@@ -95,7 +26,7 @@ const initGridFS = () => {
 };
 
 // Récupérer l'instance GridFS
-export const getGridFS = () => {
+const getGridFS = () => {
   if (!gfs) {
     console.warn('⚠️ Tentative d\'accès à GridFS non initialisé');
     
@@ -121,7 +52,7 @@ export const getGridFS = () => {
 };
 
 // Vérifier si MongoDB est connecté
-export const isConnected = () => {
+const isConnected = () => {
   const status = mongoose.connection.readyState === 1;
   if (!status && process.env.NODE_ENV === 'production') {
     console.warn('⚠️ MongoDB non connecté - Mode dégradé activé');
@@ -130,7 +61,7 @@ export const isConnected = () => {
 };
 
 // Obtenir l'état de la connexion
-export const getConnectionStatus = () => {
+const getConnectionStatus = () => {
   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
   return {
     status: states[mongoose.connection.readyState],
@@ -141,6 +72,49 @@ export const getConnectionStatus = () => {
   };
 };
 
+// Fonction principale de connexion
+const connectDB = async (): Promise<void> => {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI is not defined in environment variables');
+    }
+
+    console.log(`🔄 Tentative de connexion MongoDB (${connectionAttempts + 1}/${MAX_CONNECTION_ATTEMPTS})...`);
+    
+    const options: mongoose.ConnectOptions = {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      retryWrites: true,
+    };
+
+    const conn = await mongoose.connect(process.env.MONGODB_URI, options);
+    
+    console.log(`✅ MongoDB connecté: ${conn.connection.host}`);
+    console.log(`📊 Base de données: ${conn.connection.db?.databaseName || 'N/A'}`);
+    
+    connectionAttempts = 0;
+    
+    // Initialiser GridFS après connexion réussie
+    initGridFS();
+    
+  } catch (error) {
+    connectionAttempts++;
+    console.error(`❌ Erreur de connexion MongoDB (tentative ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}):`, error);
+    
+    if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
+      const delay = Math.min(1000 * Math.pow(2, connectionAttempts), 30000);
+      console.log(`⏳ Nouvelle tentative dans ${delay / 1000} secondes...`);
+      setTimeout(connectDB, delay);
+    } else {
+      console.error('❌ Nombre maximum de tentatives atteint');
+      if (process.env.NODE_ENV !== 'production') {
+        process.exit(1);
+      }
+    }
+  }
+};
+
 // Événements de connexion
 mongoose.connection.on('error', (err) => {
   console.error('❌ Erreur de connexion MongoDB:', err.message);
@@ -148,16 +122,13 @@ mongoose.connection.on('error', (err) => {
 
 mongoose.connection.on('disconnected', () => {
   console.log('⚠️ Déconnecté de MongoDB');
-  
   if (process.env.NODE_ENV === 'production') {
-    console.log('   ⏳ Tentative de reconnexion automatique...');
     setTimeout(connectDB, 5000);
   }
 });
 
 mongoose.connection.on('reconnected', () => {
   console.log('🔄 Reconnecté à MongoDB');
-  // Réinitialiser GridFS après reconnexion
   initGridFS();
 });
 
@@ -169,7 +140,7 @@ mongoose.connection.on('connected', () => {
   console.log('✅ Connecté à MongoDB');
 });
 
-// Fermeture propre à la terminaison
+// Fermeture propre
 process.on('SIGINT', async () => {
   try {
     await mongoose.connection.close();
@@ -181,4 +152,6 @@ process.on('SIGINT', async () => {
   }
 });
 
+// Exportations
 export default connectDB;
+export { getGridFS, isConnected, getConnectionStatus };
